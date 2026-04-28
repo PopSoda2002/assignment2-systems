@@ -38,21 +38,23 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     start_time = timeit.default_timer()
 
     # Forward pass
-    for _ in range(num_steps):
-        with torch.no_grad():
-            y = model(x)
-        torch.cuda.synchronize()
+    with torch.cuda.nvtx.range("forward"):
+        for _ in range(num_steps):
+            with torch.no_grad():
+                y = model(x)
+    torch.cuda.synchronize()
     end_time = timeit.default_timer()
     avg_time = (end_time - start_time) / num_steps
     print(f"Average time forward pass per step: {avg_time} seconds")
 
     # fwd+bwd
     fwd_bwd_start_time = timeit.default_timer()
-    for _ in range(num_steps):
-        y = model(x)
-        y.sum().backward()
-        model.zero_grad()
-        torch.cuda.synchronize()
+    with torch.cuda.nvtx.range("forward+backward"):
+        for _ in range(num_steps):
+            y = model(x)
+            y.sum().backward()
+            model.zero_grad()
+            torch.cuda.synchronize()
     fwd_bwd_end_time = timeit.default_timer()
     fwd_bwd_avg_time = (fwd_bwd_end_time - fwd_bwd_start_time) / num_steps
     print(f"Average time forward+backward pass per step: {fwd_bwd_avg_time} seconds")
@@ -60,12 +62,13 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     # full training
     full_train_start_time = timeit.default_timer()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    for _ in range(num_steps):
-        y = model(x)
-        y.sum().backward()
-        optimizer.step()
-        model.zero_grad()
-        torch.cuda.synchronize()
+    with torch.cuda.nvtx.range("full_training"):
+        for _ in range(num_steps):
+            y = model(x)
+            y.sum().backward()
+            optimizer.step()
+            model.zero_grad()
+            torch.cuda.synchronize()
     full_train_end_time = timeit.default_timer()
     full_train_avg_time = (full_train_end_time - full_train_start_time) / num_steps
     print(f"Average time full training per step: {full_train_avg_time} seconds")
