@@ -1,9 +1,11 @@
 import timeit
+from contextlib import nullcontext
+
 import torch
 
 from cs336_basics.model import BasicsTransformerLM
 
-def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3, num_steps: int = 10) -> float:
+def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3, num_steps: int = 10, profile_memory: bool = False) -> float:
     '''
     transformer model init config:
     def __init__(
@@ -35,9 +37,13 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
 
     torch.cuda.synchronize()
     print(f"Starting benchmark for {num_steps} steps...")
+
+    if profile_memory:
+        torch.cuda.memory._record_memory_history(max_entries=1000000)
+
     start_time = timeit.default_timer()
 
-    use_mixed_precision = True
+    use_mixed_precision = False
     ctx = torch.autocast(device_type="cuda", dtype=torch.float16) if use_mixed_precision else nullcontext()
     # Forward pass
     with torch.cuda.nvtx.range("forward"), ctx, torch.no_grad():
@@ -48,9 +54,12 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     avg_time = (end_time - start_time) / num_steps
     print(f"Average time forward pass per step: {avg_time} seconds mixed precision")
 
+    if profile_memory:
+        torch.cuda.memory._dump_snapshot("forward_memory_3.pickle")
+
     # fwd+bwd
     fwd_bwd_start_time = timeit.default_timer()
-    with torch.cuda.nvtx.range("forward+backward"):
+    with torch.cuda.nvtx.range("forward+backward"), torch.autocast(device_type="cuda", dtype=torch.float16):
         for _ in range(num_steps):
             y = model(x)
             y.sum().backward()
@@ -59,6 +68,10 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     fwd_bwd_end_time = timeit.default_timer()
     fwd_bwd_avg_time = (fwd_bwd_end_time - fwd_bwd_start_time) / num_steps
     print(f"Average time forward+backward pass per step: {fwd_bwd_avg_time} seconds")
+
+    if profile_memory:
+        torch.cuda.memory._dump_snapshot("forward+backward_memory_3.pickle")
+        torch.cuda.memory._record_memory_history(enabled=None)
 
     # full training
     full_train_start_time = timeit.default_timer()

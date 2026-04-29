@@ -13,12 +13,13 @@ def benchmark_script():
     }
     data_config = {
         "batch_size": 1,
-        "seq_len": 8192,
+        "seq_len": 1024,
     }
     warmup_steps = 3
     num_steps = 10
     cs336_basics.model.scaled_dot_product_attention = cs336_basics.model.annotated_scaled_dot_product_attention
-    benchmark_model(model_config, data_config, warmup_steps, num_steps)
+    profile_memory = True
+    benchmark_model(model_config, data_config, warmup_steps, num_steps, profile_memory)
 
 if __name__ == "__main__":
     benchmark_script()
