@@ -37,15 +37,16 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     print(f"Starting benchmark for {num_steps} steps...")
     start_time = timeit.default_timer()
 
+    use_mixed_precision = True
+    ctx = torch.autocast(device_type="cuda", dtype=torch.float16) if use_mixed_precision else nullcontext()
     # Forward pass
-    with torch.cuda.nvtx.range("forward"):
+    with torch.cuda.nvtx.range("forward"), ctx, torch.no_grad():
         for _ in range(num_steps):
-            with torch.no_grad():
-                y = model(x)
+            y = model(x)
     torch.cuda.synchronize()
     end_time = timeit.default_timer()
     avg_time = (end_time - start_time) / num_steps
-    print(f"Average time forward pass per step: {avg_time} seconds")
+    print(f"Average time forward pass per step: {avg_time} seconds mixed precision")
 
     # fwd+bwd
     fwd_bwd_start_time = timeit.default_timer()
