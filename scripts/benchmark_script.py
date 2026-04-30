@@ -1,7 +1,7 @@
-from cs336_systems.benchmark import benchmark_model
+from cs336_systems.benchmark import benchmark_model, benchmark_attention
 import cs336_basics.model
 
-def benchmark_script():
+def basic_benchmark():
     model_config = {
         "vocab_size": 50257,
         "context_length": 16384,
@@ -22,4 +22,4 @@ def benchmark_script():
     benchmark_model(model_config, data_config, warmup_steps, num_steps, profile_memory)
 
 if __name__ == "__main__":
-    benchmark_script()
+    benchmark_attention()

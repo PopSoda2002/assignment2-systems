@@ -3,7 +3,7 @@ from contextlib import nullcontext
 
 import torch
 
-from cs336_basics.model import BasicsTransformerLM
+from cs336_basics.model import BasicsTransformerLM, scaled_dot_product_attention
 
 def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3, num_steps: int = 10, profile_memory: bool = False) -> float:
     '''
@@ -86,3 +86,35 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     full_train_end_time = timeit.default_timer()
     full_train_avg_time = (full_train_end_time - full_train_start_time) / num_steps
     print(f"Average time full training per step: {full_train_avg_time} seconds")
+
+def benchmark_attention():
+    batch_size = 8
+    num_heads = 1
+    d_models = [16, 32, 64, 128]
+    seq_lens = [256, 1024, 4096, 8192, 16384]
+    num_steps = 10
+
+    for d_model in d_models:
+        for seq_len in seq_lens:
+            Q = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
+            K = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
+            V = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
+            start_time = timeit.default_timer()
+            for i in range(num_steps):
+                output = scaled_dot_product_attention(Q, K, V)
+            torch.cuda.synchronize()
+            mem_before_bwd = torch.cuda.memory_allocated()
+            print(f"d_model: {d_model}, seq_len: {seq_len}, Memory before bwd: {mem_before_bwd/1e9:.2f} GB")
+            torch.cuda.synchronize()
+            end_time = timeit.default_timer()
+            avg_time = (end_time - start_time) / num_steps
+            print(f"d_model: {d_model}, seq_len: {seq_len}, Average time sdpa fwd pass: {avg_time} seconds")
+
+            start_time = timeit.default_timer()
+            for i in range(num_steps):
+                out = scaled_dot_product_attention(Q, K, V)
+                out.sum().backward()
+                torch.cuda.synchronize()
+            end_time = timeit.default_timer()
+            avg_time = (end_time - start_time) / num_steps
+            print(f"d_model: {d_model}, seq_len: {seq_len}, Average time sdpa fwd+bwd pass: {avg_time} seconds")
