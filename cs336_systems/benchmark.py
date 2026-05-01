@@ -21,9 +21,11 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     data_config:
     {"batch_size": int, "seq_len": int}
     '''
-    model = BasicsTransformerLM(**model_config)
+    compile_model = True
+    model = torch.compile(BasicsTransformerLM(**model_config)) if compile_model else BasicsTransformerLM(**model_config)
     model.eval()
     model.cuda()
+    
     batch_size, seq_len = data_config['batch_size'], data_config['seq_len']
     vocab_size = model_config['vocab_size']
     x = torch.randint(0, vocab_size, (batch_size, seq_len))
@@ -34,6 +36,11 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
     for _ in range(warmup_steps):
         with torch.no_grad():
             y = model(x)
+
+    for _ in range(warmup_steps):
+        y = model(x)
+        y.sum().backward()
+        model.zero_grad()
 
     torch.cuda.synchronize()
     print(f"Starting benchmark for {num_steps} steps...")
@@ -59,7 +66,7 @@ def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3
 
     # fwd+bwd
     fwd_bwd_start_time = timeit.default_timer()
-    with torch.cuda.nvtx.range("forward+backward"), torch.autocast(device_type="cuda", dtype=torch.float16):
+    with torch.cuda.nvtx.range("forward+backward"):
         for _ in range(num_steps):
             y = model(x)
             y.sum().backward()
@@ -94,6 +101,9 @@ def benchmark_attention():
     seq_lens = [256, 1024, 4096, 8192, 16384]
     num_steps = 10
 
+    compile_sdpa = False
+    sdpa_func = torch.compile(scaled_dot_product_attention) if compile_sdpa else scaled_dot_product_attention
+
     for d_model in d_models:
         for seq_len in seq_lens:
             Q = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
@@ -101,7 +111,7 @@ def benchmark_attention():
             V = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
             start_time = timeit.default_timer()
             for i in range(num_steps):
-                output = scaled_dot_product_attention(Q, K, V)
+                output = sdpa_func(Q, K, V)
             torch.cuda.synchronize()
             mem_before_bwd = torch.cuda.memory_allocated()
             print(f"d_model: {d_model}, seq_len: {seq_len}, Memory before bwd: {mem_before_bwd/1e9:.2f} GB")
@@ -112,7 +122,7 @@ def benchmark_attention():
 
             start_time = timeit.default_timer()
             for i in range(num_steps):
-                out = scaled_dot_product_attention(Q, K, V)
+                out = sdpa_func(Q, K, V)
                 out.sum().backward()
                 torch.cuda.synchronize()
             end_time = timeit.default_timer()
