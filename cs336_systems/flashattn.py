@@ -4,6 +4,7 @@ import torch
 import math
 import triton
 import triton.language as tl
+from einops import einsum
 
 class FlashAttentionPyTorch(torch.autograd.Function):
     @staticmethod
@@ -42,7 +43,23 @@ class FlashAttentionPyTorch(torch.autograd.Function):
             O[:, i * B_q:(i + 1) * B_q, :] = O_i
             L[:, i * B_q:(i + 1) * B_q] = L_i
         ctx.save_for_backward(Q, K, V, O, L)
+        ctx.is_causal = is_causal
         return O
+
+    @staticmethod
+    def backward(ctx, grad_out):
+        Q, K, V, O, L = ctx.saved_tensors
+        is_causal = ctx.is_causal
+        batch_size, Q_len, d_q = Q.shape
+        S = einsum(Q, K, "b q d, b k d -> b q k") / math.sqrt(d_q)
+        P = torch.exp(S - L[..., None])
+        dV = einsum(P, grad_out, "b q k, b q d -> b k d")
+        dP = einsum(grad_out, V, "b q d, b k d -> b q k")
+        D = (grad_out * O).sum(dim=-1)
+        dS = P * (dP - D[..., None])
+        dQ = einsum(dS, K, "b q k, b k d -> b q d") / math.sqrt(d_q)
+        dK = einsum(dS, Q, "b q k, b q d -> b k d") / math.sqrt(d_q)
+        return dQ, dK, dV, None
 
 @triton.jit
 def flash_fwd_kernel(
@@ -147,4 +164,8 @@ class FlashAttentionTriton(torch.autograd.Function):
             scale, dim, B_q, B_k, is_causal
         )
         ctx.save_for_backward(Q, K, V, O, L)
+        ctx.is_causal = is_causal
         return O
+
+    def backward(ctx, grad_out):
+        assert NotImplementedError("Backward pass not implemented")
