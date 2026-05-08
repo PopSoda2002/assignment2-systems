@@ -19,13 +19,14 @@ class FlashAttentionPyTorch(torch.autograd.Function):
         Q_tiles = Q.reshape(Q_batch_size, N_q // B_q, B_q, d_q)
         K_tiles = K.reshape(K_batch_size, N_k // B_k, B_k, d_k)
         V_tiles = V.reshape(V_batch_size, N_v // B_k, B_k, d_v)
-        O = torch.zeros(Q_batch_size, N_q, d_v)
-        L = torch.zeros(Q_batch_size, N_q)
+        device = Q.device
+        O = torch.zeros(Q_batch_size, N_q, d_v, device=device)
+        L = torch.zeros(Q_batch_size, N_q, device=device)
         for i in range(Q_tiles_count):
             Q_i = Q_tiles[:, i, :, :]
-            O_i = torch.zeros(Q_batch_size, B_q, d_v)
-            l_i = torch.zeros(Q_batch_size, B_q)
-            max_i = torch.full((Q_batch_size, B_q), float('-inf'))
+            O_i = torch.zeros(Q_batch_size, B_q, d_v, device=device)
+            l_i = torch.zeros(Q_batch_size, B_q, device=device)
+            max_i = torch.full((Q_batch_size, B_q), float('-inf'), device=device)
             for j in range(K_tiles_count):
                 K_j = K_tiles[:, j, :, :]
                 V_j = V_tiles[:, j, :, :]

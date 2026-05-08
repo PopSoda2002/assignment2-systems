@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import torch
 
 from cs336_basics.model import BasicsTransformerLM, scaled_dot_product_attention
+from cs336_systems.flashattn import FlashAttentionPyTorch, FlashAttentionTriton
 
 def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3, num_steps: int = 10, profile_memory: bool = False) -> float:
     '''
@@ -128,3 +129,34 @@ def benchmark_attention():
             end_time = timeit.default_timer()
             avg_time = (end_time - start_time) / num_steps
             print(f"d_model: {d_model}, seq_len: {seq_len}, Average time sdpa fwd+bwd pass: {avg_time} seconds")
+
+def benchmark_flash_attn(use_triton: bool = False):
+    batch_size = 1
+    num_steps = 10
+    sdpa_func = FlashAttentionTriton.apply if use_triton else FlashAttentionPyTorch.apply
+    seq_lens = [128, 256, 512, 1024, 2048, 4096, 8192]
+    d_model = 128
+    for seq_len in seq_lens:
+        Q = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
+        K = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
+        V = torch.randn(batch_size, seq_len, d_model, requires_grad=True, device="cuda")
+        start_time = timeit.default_timer()
+        for i in range(num_steps):
+            output = sdpa_func(Q, K, V)
+        torch.cuda.synchronize()
+        mem_before_bwd = torch.cuda.memory_allocated()
+        print(f"d_model: {d_model}, seq_len: {seq_len}, Memory before bwd: {mem_before_bwd/1e9:.2f} GB")
+        torch.cuda.synchronize()
+        end_time = timeit.default_timer()
+        avg_time = (end_time - start_time) / num_steps
+        print(f"d_model: {d_model}, seq_len: {seq_len}, Average time sdpa fwd pass: {avg_time} seconds")
+        if use_triton:
+            continue
+        start_time = timeit.default_timer()
+        for i in range(num_steps):
+            out = sdpa_func(Q, K, V)
+            out.sum().backward()
+            torch.cuda.synchronize()
+        end_time = timeit.default_timer()
+        avg_time = (end_time - start_time) / num_steps
+        print(f"d_model: {d_model}, seq_len: {seq_len}, Average time sdpa fwd+bwd pass: {avg_time} seconds")
