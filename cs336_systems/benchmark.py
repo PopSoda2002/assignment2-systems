@@ -2,6 +2,9 @@ import timeit
 from contextlib import nullcontext
 
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+import os
 
 from cs336_basics.model import BasicsTransformerLM, scaled_dot_product_attention
 from cs336_systems.flashattn import FlashAttentionPyTorch, FlashAttentionTriton
@@ -160,3 +163,34 @@ def benchmark_flash_attn(use_triton: bool = False):
         end_time = timeit.default_timer()
         avg_time = (end_time - start_time) / num_steps
         print(f"d_model: {d_model}, seq_len: {seq_len}, Average time sdpa fwd+bwd pass: {avg_time} seconds")
+
+def worker_fn(rank, world_size, data_size, num_gpus, warmup_steps):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+    length = data_size * 1024 * 1024 // 4
+    data = torch.randint(0, 10, (length,), device=f"cuda:{rank}")
+    for _ in range(warmup_steps):
+        dist.all_reduce(data, async_op=False)
+    torch.cuda.synchronize()
+    start_time = timeit.default_timer()
+    dist.all_reduce(data, async_op=False)
+    torch.cuda.synchronize()
+    end_time = timeit.default_timer()
+    print(f"Average time all reduce {data_size} MB {num_gpus} GPUs per step: {end_time - start_time} seconds")
+    cleanup()
+
+def cleanup():
+    dist.destroy_process_group()
+
+def benchmark_distributed_communication_single_node():
+    # MB
+    data_size_ranges = [1, 10, 100, 1024]
+    # Number of GPUs
+    num_gpus_ranges = [2, 4]
+    warmup_steps = 5
+    for data_size in data_size_ranges:
+        for num_gpus in num_gpus_ranges:
+            mp.spawn(fn=worker_fn, args=(num_gpus, data_size, num_gpus, warmup_steps), nprocs=num_gpus, join=True)

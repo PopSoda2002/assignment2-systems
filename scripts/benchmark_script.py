@@ -1,4 +1,4 @@
-from cs336_systems.benchmark import benchmark_model, benchmark_attention, benchmark_flash_attn
+from cs336_systems.benchmark import benchmark_model, benchmark_attention, benchmark_flash_attn, benchmark_distributed_communication_single_node
 import cs336_basics.model
 
 def basic_benchmark():
@@ -22,4 +22,4 @@ def basic_benchmark():
     benchmark_model(model_config, data_config, warmup_steps, num_steps, profile_memory)
 
 if __name__ == "__main__":
-    benchmark_flash_attn(use_triton=False)
+    benchmark_distributed_communication_single_node()
