@@ -225,13 +225,15 @@ def benchmark_ddp(rank, world_size):
     torch.cuda.synchronize()
     start_time = timeit.default_timer()
     num_steps = 10
+    comm_time = 0
     for _ in range(num_steps):
         output_BLD = ddp.forward(input_BLD)
         loss = output_BLD.sum()
-        ddp.backward(loss)
+        comm_time += ddp.backward(loss)
         optimizer.step()
         model.zero_grad()
     torch.cuda.synchronize()
     end_time = timeit.default_timer()
-    print(f"Average time ddp forward+backward+update per step: {end_time - start_time} seconds")
+    print(f"Average time ddp forward+backward+update per step: {(end_time - start_time) / num_steps} seconds")
+    print(f"Average communication time per step: {comm_time / num_steps} seconds")
     cleanup()
