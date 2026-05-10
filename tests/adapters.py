@@ -4,6 +4,7 @@ import torch
 
 from cs336_systems.flashattn import FlashAttentionPyTorch, FlashAttentionTriton
 from cs336_systems.ddp import DDP
+from cs336_systems.optimizer_sharding import SharedOptimizer
 
 
 def get_flashattention_autograd_function_pytorch() -> type:
@@ -135,4 +136,4 @@ def get_sharded_optimizer(params, optimizer_cls: type[torch.optim.Optimizer], **
     Returns:
         Instance of sharded optimizer.
     """
-    raise NotImplementedError
+    return SharedOptimizer(params, optimizer_cls, **kwargs)
