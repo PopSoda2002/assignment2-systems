@@ -4,6 +4,7 @@ from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+import torch.cuda.nvtx as nvtx
 import os
 
 from cs336_basics.model import BasicsTransformerLM, scaled_dot_product_attention
@@ -219,21 +220,26 @@ def benchmark_ddp(rank, world_size):
     input_BLD = input_BLD[data_start_index:data_end_index, ...]
     input_BLD = input_BLD.to(f"cuda:{rank}")
     model = BasicsTransformerLM(**model_config)
+    model.cuda()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    ddp = DDP(model, f"cuda:{rank}")
+    ddp = DDP(model)
     print(f"Rank {rank} input_BLD shape: {input_BLD.shape}")
     torch.cuda.synchronize()
     start_time = timeit.default_timer()
     num_steps = 10
-    comm_time = 0
     for _ in range(num_steps):
-        output_BLD = ddp.forward(input_BLD)
+        with nvtx.range("ddp_forward"):
+            output_BLD = ddp(input_BLD)
         loss = output_BLD.sum()
-        comm_time += ddp.backward(loss)
-        optimizer.step()
-        model.zero_grad()
+        with nvtx.range("ddp_backward"):
+            loss.backward()
+        with nvtx.range("ddp_finish_gradient_synchronization"):
+            ddp.finish_gradient_synchronization()
+        with nvtx.range("ddp_step"):
+            optimizer.step()
+        with nvtx.range("ddp_zero_grad"):
+            model.zero_grad()
     torch.cuda.synchronize()
     end_time = timeit.default_timer()
     print(f"Average time ddp forward+backward+update per step: {(end_time - start_time) / num_steps} seconds")
-    print(f"Average communication time per step: {comm_time / num_steps} seconds")
     cleanup()
