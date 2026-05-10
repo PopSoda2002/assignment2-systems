@@ -8,6 +8,7 @@ import os
 
 from cs336_basics.model import BasicsTransformerLM, scaled_dot_product_attention
 from cs336_systems.flashattn import FlashAttentionPyTorch, FlashAttentionTriton
+from cs336_systems.ddp import DDP
 
 def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3, num_steps: int = 10, profile_memory: bool = False) -> float:
     '''
@@ -194,3 +195,43 @@ def benchmark_distributed_communication_single_node():
     for data_size in data_size_ranges:
         for num_gpus in num_gpus_ranges:
             mp.spawn(fn=worker_fn, args=(num_gpus, data_size, num_gpus, warmup_steps), nprocs=num_gpus, join=True)
+
+def benchmark_ddp(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+    batch_size, seq_len = 8, 100
+    vocab_size = 50257
+    input_BLD = torch.randint(0, vocab_size, (batch_size, seq_len))
+    model_config = {
+        "vocab_size": vocab_size,
+        "context_length": 16384,
+        "d_model": 2048,
+        "num_layers": 10,
+        "num_heads": 16,
+        "d_ff": 4096,
+        "rope_theta": 10000.0,
+    }
+    batch_size = input_BLD.shape[0]
+    data_start_index = rank * batch_size // world_size
+    data_end_index = (rank + 1) * batch_size // world_size
+    input_BLD = input_BLD[data_start_index:data_end_index, ...]
+    input_BLD = input_BLD.to(f"cuda:{rank}")
+    model = BasicsTransformerLM(**model_config)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    ddp = DDP(model, f"cuda:{rank}")
+    print(f"Rank {rank} input_BLD shape: {input_BLD.shape}")
+    torch.cuda.synchronize()
+    start_time = timeit.default_timer()
+    num_steps = 10
+    for _ in range(num_steps):
+        output_BLD = ddp.forward(input_BLD)
+        loss = output_BLD.sum()
+        ddp.backward(loss)
+        optimizer.step()
+        model.zero_grad()
+    torch.cuda.synchronize()
+    end_time = timeit.default_timer()
+    print(f"Average time ddp forward+backward+update per step: {end_time - start_time} seconds")
+    cleanup()

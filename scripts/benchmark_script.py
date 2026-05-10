@@ -1,5 +1,13 @@
-from cs336_systems.benchmark import benchmark_model, benchmark_attention, benchmark_flash_attn, benchmark_distributed_communication_single_node
+from cs336_systems.benchmark import (
+    benchmark_model, 
+    benchmark_attention, 
+    benchmark_flash_attn, 
+    benchmark_distributed_communication_single_node,
+    benchmark_ddp
+)
 import cs336_basics.model
+
+import torch.multiprocessing as mp
 
 def basic_benchmark():
     model_config = {
@@ -22,4 +30,5 @@ def basic_benchmark():
     benchmark_model(model_config, data_config, warmup_steps, num_steps, profile_memory)
 
 if __name__ == "__main__":
-    benchmark_distributed_communication_single_node()
+    world_size = 4
+    mp.spawn(fn=benchmark_ddp, args=(world_size,), nprocs=world_size, join=True)
