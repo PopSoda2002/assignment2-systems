@@ -10,6 +10,7 @@ import os
 from cs336_basics.model import BasicsTransformerLM, scaled_dot_product_attention
 from cs336_systems.flashattn import FlashAttentionPyTorch, FlashAttentionTriton
 from cs336_systems.ddp import DDP
+from cs336_systems.optimizer_sharding import SharedOptimizer
 
 def benchmark_model(model_config: dict, data_config: dict, warmup_steps: int = 3, num_steps: int = 10, profile_memory: bool = False) -> float:
     '''
@@ -239,6 +240,55 @@ def benchmark_ddp(rank, world_size):
             optimizer.step()
         with nvtx.range("ddp_zero_grad"):
             model.zero_grad()
+    torch.cuda.synchronize()
+    end_time = timeit.default_timer()
+    print(f"Average time ddp forward+backward+update per step: {(end_time - start_time) / num_steps} seconds")
+    cleanup()
+
+def benchmark_optimizer_sharding(rank, world_size):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+    batch_size, seq_len = 8, 100
+    vocab_size = 50257
+    input_BLD = torch.randint(0, vocab_size, (batch_size, seq_len))
+    model_config = {
+        "vocab_size": vocab_size,
+        "context_length": 16384,
+        "d_model": 2048,
+        "num_layers": 10,
+        "num_heads": 16,
+        "d_ff": 4096,
+        "rope_theta": 10000.0,
+    }
+    batch_size = input_BLD.shape[0]
+    data_start_index = rank * batch_size // world_size
+    data_end_index = (rank + 1) * batch_size // world_size
+    input_BLD = input_BLD[data_start_index:data_end_index, ...]
+    input_BLD = input_BLD.to(f"cuda:{rank}")
+    model = BasicsTransformerLM(**model_config)
+    model.cuda()
+    mem_before_optimizer = torch.cuda.memory_allocated()
+    if rank == 0:
+        print(f"Memory before optimizer: {mem_before_optimizer/1e9:.2f} GB")
+    optimizer = SharedOptimizer(model.parameters(), torch.optim.Adam, lr=0.001)
+    mem_after_optimizer = torch.cuda.memory_allocated()
+    torch.cuda.synchronize()
+    start_time = timeit.default_timer()
+    num_steps = 1
+    for _ in range(num_steps):
+        output_BLD = model(input_BLD)
+        loss = output_BLD.sum()
+        loss.backward()
+        mem_before_optimizer_step = torch.cuda.memory_allocated()
+        if rank == 0:
+            print(f"Memory before optimizer step: {mem_before_optimizer_step/1e9:.2f} GB")
+        optimizer.step()
+        mem_after_optimizer_step = torch.cuda.memory_allocated()
+        if rank == 0:
+            print(f"Memory after optimizer step: {mem_after_optimizer_step/1e9:.2f} GB")
+        model.zero_grad()
     torch.cuda.synchronize()
     end_time = timeit.default_timer()
     print(f"Average time ddp forward+backward+update per step: {(end_time - start_time) / num_steps} seconds")
