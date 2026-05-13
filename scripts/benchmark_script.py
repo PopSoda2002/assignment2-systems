@@ -4,7 +4,8 @@ from cs336_systems.benchmark import (
     benchmark_flash_attn, 
     benchmark_distributed_communication_single_node,
     benchmark_ddp,
-    benchmark_optimizer_sharding
+    benchmark_optimizer_sharding,
+    benchmark_fsdp
 )
 import cs336_basics.model
 
@@ -31,5 +32,5 @@ def basic_benchmark():
     benchmark_model(model_config, data_config, warmup_steps, num_steps, profile_memory)
 
 if __name__ == "__main__":
-    world_size = 2
-    mp.spawn(fn=benchmark_optimizer_sharding, args=(world_size,), nprocs=world_size, join=True)
+    world_size = 1
+    mp.spawn(fn=benchmark_fsdp, args=(world_size,), nprocs=world_size, join=True)

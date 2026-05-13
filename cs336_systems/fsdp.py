@@ -1,5 +1,8 @@
 import torch
 import torch.distributed as dist
+from cs336_basics.model import Embedding, Linear
+
+SHARDABLE_MODULE_TYPES = (torch.nn.Linear, torch.nn.Embedding, Linear, Embedding)
 
 class FSDP(torch.nn.Module):
 
@@ -13,7 +16,7 @@ class FSDP(torch.nn.Module):
         self.sharded_params = set()
         self.sharded_params_backup = {}
         for module in self.module.modules():
-            if isinstance(module, torch.nn.Linear) or isinstance(module, torch.nn.Embedding):
+            if isinstance(module, SHARDABLE_MODULE_TYPES):
                 full_shape = module.weight.data.shape
                 shape_size = full_shape[0] // self.world_size
                 start = self.rank * shape_size
@@ -25,17 +28,21 @@ class FSDP(torch.nn.Module):
                 module.register_full_backward_pre_hook(self.sharded_backward_pre_hook)
                 module.weight.register_post_accumulate_grad_hook(self.sharded_post_accumulate_grad_hook)
             else:
-                for p in module.parameters():
+                for p in module.parameters(recurse=False):
                     if p.requires_grad:
                         p.register_post_accumulate_grad_hook(self.replicated_post_accumulate_grad_hook)
 
     def forward(self, *inputs, **kwargs):
-        return self.module(*inputs, **kwargs)
+        if self.compute_dtype is None:
+            return self.module(*inputs, **kwargs)
+        with torch.autocast(device_type="cuda", dtype=self.compute_dtype):
+            return self.module(*inputs, **kwargs)
 
     def sharded_forward_pre_hook(self, module, inputs):
         sharded = module.weight.data
+        layer_dtype = sharded.dtype if self.compute_dtype is None else self.compute_dtype
         full_shape = (sharded.shape[0] * self.world_size, *sharded.shape[1:])
-        full = torch.empty(full_shape, dtype=sharded.dtype, device=sharded.device)
+        full = torch.empty(full_shape, dtype=layer_dtype, device=sharded.device)
         if self.compute_dtype is not None:
             sharded_temp = sharded.clone().to(self.compute_dtype)
             dist.all_gather_into_tensor(full, sharded_temp)
@@ -51,11 +58,15 @@ class FSDP(torch.nn.Module):
 
     def sharded_backward_pre_hook(self, module, grad_output):
         sharded = module.weight.data
+        layer_dtype = sharded.dtype if self.compute_dtype is None else self.compute_dtype
         full_shape = (sharded.shape[0] * self.world_size, *sharded.shape[1:])
-        full = torch.empty(full_shape, dtype=sharded.dtype, device=sharded.device)
-        dist.all_gather_into_tensor(full, sharded)
+        full = torch.empty(full_shape, dtype=layer_dtype, device=sharded.device)
         if self.compute_dtype is not None:
-            full = full.to(self.compute_dtype)
+            sharded_temp = sharded.clone().to(self.compute_dtype)
+            dist.all_gather_into_tensor(full, sharded_temp)
+            del sharded_temp
+        else:  
+            dist.all_gather_into_tensor(full, sharded)
         self.sharded_params_backup[id(module.weight)] = sharded
         module.weight.data = full
 
